@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS & Photo Attendance Portal</title>
+    <style>
+        :root {
+            --bg-color: #0b132b;
+            --card-bg: #1c2541;
+            --accent: #48cae4;
+            --success: #06d6a0;
+            --danger: #ef476f;
+            --text-light: #edf2f4;
+            --text-muted: #8d99ae;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-light);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .card {
+            background: var(--card-bg);
+            width: 100%;
+            max-width: 580px;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+            border: 1px solid #3a506b;
+        }
+
+        h2 { margin: 0 0 6px 0; text-align: center; color: var(--accent); }
+        p.subtitle { text-align: center; color: var(--text-muted); font-size: 13px; margin-top: 0; margin-bottom: 20px; }
+
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            height: 300px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 16px;
+            border: 2px solid #3a506b;
+        }
+
+        video { width: 100%; height: 100%; object-fit: cover; }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        input {
+            flex: 1;
+            padding: 12px 14px;
+            background: #0b132b;
+            border: 1px solid #3a506b;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        button {
+            padding: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .btn-in { background: var(--success); color: #0b132b; }
+        .btn-out { background: var(--danger); color: white; }
+
+        .status-banner {
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            text-align: center;
+            background: #0b132b;
+            border: 1px solid #3a506b;
+        }
+
+        .log-box {
+            margin-top: 20px;
+            background: #0b132b;
+            padding: 12px;
+            border-radius: 8px;
+            max-height: 120px;
+            overflow-y: auto;
+            font-size: 12px;
+            color: var(--text-muted);
+            border: 1px solid #3a506b;
+        }
+
+        .admin-box {
+            margin-top: 20px;
+            padding-top: 14px;
+            border-top: 1px solid #3a506b;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .admin-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr auto;
+            gap: 8px;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Attendance Portal</h2>
+    <p class="subtitle">Live GPS Geofencing & Photo Verification System</p>
+
+    <div class="video-wrapper">
+        <video id="webcam" autoplay playsinline muted></video>
+    </div>
+
+    <div class="input-group">
+        <input type="text" id="employee-id" placeholder="Enter Full Name / Employee ID">
+    </div>
+
+    <div class="btn-grid">
+        <button class="btn-in" onclick="processClock('CLOCK IN')">Clock IN</button>
+        <button class="btn-out" onclick="processClock('CLOCK OUT')">Clock OUT</button>
+    </div>
+
+    <div id="status-display" class="status-banner">Initializing camera and GPS...</div>
+
+    <div class="admin-box">
+        <strong>Office Target Coordinates (Geofence)</strong>
+        <div class="admin-controls">
+            <input type="number" step="any" id="admin-lat" placeholder="Latitude" value="12.9716">
+            <input type="number" step="any" id="admin-lng" placeholder="Longitude" value="77.5946">
+            <input type="number" id="admin-radius" placeholder="Radius (m)" value="100">
+            <button onclick="saveAdminGeofence()" style="padding: 8px; background: #3a506b; color: white;">Save</button>
+        </div>
+        <p id="location-telemetry" style="margin-top: 8px; margin-bottom: 0;"></p>
+    </div>
+
+    <div class="log-box" id="attendance-log">
+        <strong>Activity Logs:</strong><br>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('webcam');
+    const statusDisplay = document.getElementById('status-display');
+    const telemetry = document.getElementById('location-telemetry');
+    const logBox = document.getElementById('attendance-log');
+
+    let currentCoordinates = null;
+
+    let adminConfig = JSON.parse(localStorage.getItem('portal_admin_config') || JSON.stringify({
+        lat: 12.9716,
+        lng: 77.5946,
+        radius: 100
+    }));
+
+    async function initSystem() {
+        document.getElementById('admin-lat').value = adminConfig.lat;
+        document.getElementById('admin-lng').value = adminConfig.lng;
+        document.getElementById('admin-radius').value = adminConfig.radius;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            updateStatus("System Ready. Enter Employee Name and click Clock IN/OUT.", "var(--success)");
+        } catch (err) {
+            updateStatus("Camera Access Error: " + err.message + ". Allow camera access in browser.", "var(--danger)");
+        }
+
+        trackGPS();
+    }
+
+    function trackGPS() {
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(
+                (pos) => {
+                    currentCoordinates = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    const distance = computeHaversine(
+                        currentCoordinates.lat, currentCoordinates.lng,
+                        adminConfig.lat, adminConfig.lng
+                    );
+                    telemetry.innerText = `GPS: (${currentCoordinates.lat.toFixed(4)}, ${currentCoordinates.lng.toFixed(4)}) | Distance to Office: ${Math.round(distance)}m`;
+                },
+                (err) => { telemetry.innerText = "GPS Error: " + err.message + " (Enable Location)"; },
+                { enableHighAccuracy: true }
+            );
+        } else {
+            telemetry.innerText = "Geolocation not supported by this browser.";
+        }
+    }
+
+    function computeHaversine(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const rad = Math.PI / 180;
+        const dLat = (lat2 - lat1) * rad;
+        const dLon = (lon2 - lon1) * rad;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function processClock(actionType) {
+        const empName = document.getElementById('employee-id').value.trim();
+
+        if (!empName) {
+            alert("Please enter Employee Name / ID first!");
+            return;
+        }
+
+        if (!currentCoordinates) {
+            updateStatus("GPS Error: Acquiring location, please wait...", "var(--danger)");
+            return;
+        }
+
+        const distance = computeHaversine(currentCoordinates.lat, currentCoordinates.lng, adminConfig.lat, adminConfig.lng);
+        
+        if (distance > adminConfig.radius) {
+            updateStatus(`ACCESS DENIED: You are ${Math.round(distance)}m from office (Max allowed: ${adminConfig.radius}m)`, "var(--danger)");
+            return;
+        }
+
+        const timeString = new Date().toLocaleTimeString();
+        updateStatus(`SUCCESS: ${actionType} recorded for '${empName}' at ${timeString}`, "var(--success)");
+
+        const logEntry = document.createElement('div');
+        logEntry.innerText = `[${timeString}] ${actionType} - ${empName} (Distance: ${Math.round(distance)}m)`;
+        logBox.appendChild(logEntry);
+    }
+
+    function updateStatus(text, color) {
+        statusDisplay.innerText = text;
+        statusDisplay.style.borderColor = color;
+        statusDisplay.style.color = color;
+    }
+
+    function saveAdminGeofence() {
+        adminConfig = {
+            lat: parseFloat(document.getElementById('admin-lat').value),
+            lng: parseFloat(document.getElementById('admin-lng').value),
+            radius: parseFloat(document.getElementById('admin-radius').value)
+        };
+        localStorage.setItem('portal_admin_config', JSON.stringify(adminConfig));
+        alert("Geofence settings updated successfully!");
+    }
+
+    window.onload = initSystem;
+</script>
+</body>
+</html>
