@@ -30,7 +30,7 @@
         .card {
             background: var(--card-bg);
             width: 100%;
-            max-width: 580px;
+            max-width: 620px;
             border-radius: 16px;
             padding: 24px;
             box-shadow: 0 15px 35px rgba(0,0,0,0.4);
@@ -43,7 +43,7 @@
         .video-wrapper {
             position: relative;
             width: 100%;
-            height: 300px;
+            height: 280px;
             background: #000;
             border-radius: 12px;
             overflow: hidden;
@@ -52,6 +52,7 @@
         }
 
         video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { display: none; }
 
         .input-group {
             display: flex;
@@ -96,18 +97,46 @@
             text-align: center;
             background: #0b132b;
             border: 1px solid #3a506b;
+            margin-bottom: 16px;
         }
 
         .log-box {
-            margin-top: 20px;
             background: #0b132b;
             padding: 12px;
             border-radius: 8px;
-            max-height: 120px;
+            max-height: 200px;
             overflow-y: auto;
             font-size: 12px;
             color: var(--text-muted);
             border: 1px solid #3a506b;
+        }
+
+        .log-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid #1c2541;
+        }
+
+        .log-item img {
+            width: 48px;
+            height: 48px;
+            border-radius: 6px;
+            object-fit: cover;
+            border: 1px solid var(--accent);
+            cursor: pointer;
+        }
+
+        .log-info { flex: 1; }
+
+        .export-btn {
+            width: 100%;
+            margin-top: 10px;
+            background: #3a506b;
+            color: white;
+            padding: 10px;
+            font-size: 13px;
         }
 
         .admin-box {
@@ -134,6 +163,7 @@
 
     <div class="video-wrapper">
         <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="snapshot-canvas"></canvas>
     </div>
 
     <div class="input-group">
@@ -147,6 +177,11 @@
 
     <div id="status-display" class="status-banner">Initializing camera and GPS...</div>
 
+    <div class="log-box" id="attendance-log">
+        <strong>Activity Logs with Photos:</strong><br>
+    </div>
+    <button class="export-btn" onclick="exportLogsCSV()">📥 Download Attendance Report (CSV)</button>
+
     <div class="admin-box">
         <strong>Office Target Coordinates (Geofence)</strong>
         <div class="admin-controls">
@@ -157,19 +192,18 @@
         </div>
         <p id="location-telemetry" style="margin-top: 8px; margin-bottom: 0;"></p>
     </div>
-
-    <div class="log-box" id="attendance-log">
-        <strong>Activity Logs:</strong><br>
-    </div>
 </div>
 
 <script>
     const video = document.getElementById('webcam');
+    const canvas = document.getElementById('snapshot-canvas');
+    const ctx = canvas.getContext('2d');
     const statusDisplay = document.getElementById('status-display');
     const telemetry = document.getElementById('location-telemetry');
     const logBox = document.getElementById('attendance-log');
 
     let currentCoordinates = null;
+    let attendanceRecords = JSON.parse(localStorage.getItem('portal_attendance_records_v2') || '[]');
 
     let adminConfig = JSON.parse(localStorage.getItem('portal_admin_config') || JSON.stringify({
         lat: 12.9716,
@@ -181,6 +215,8 @@
         document.getElementById('admin-lat').value = adminConfig.lat;
         document.getElementById('admin-lng').value = adminConfig.lng;
         document.getElementById('admin-radius').value = adminConfig.radius;
+
+        renderSavedLogs();
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -207,8 +243,6 @@
                 (err) => { telemetry.innerText = "GPS Error: " + err.message + " (Enable Location)"; },
                 { enableHighAccuracy: true }
             );
-        } else {
-            telemetry.innerText = "Geolocation not supported by this browser.";
         }
     }
 
@@ -221,6 +255,13 @@
                   Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
                   Math.sin(dLon/2) * Math.sin(dLon/2);
         return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function capturePhoto() {
+        canvas.width = video.videoWidth || 320;
+        canvas.height = video.videoHeight || 240;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.5); // Compressed JPEG snapshot
     }
 
     function processClock(actionType) {
@@ -243,12 +284,78 @@
             return;
         }
 
-        const timeString = new Date().toLocaleTimeString();
-        updateStatus(`SUCCESS: ${actionType} recorded for '${empName}' at ${timeString}`, "var(--success)");
+        const photoData = capturePhoto();
 
-        const logEntry = document.createElement('div');
-        logEntry.innerText = `[${timeString}] ${actionType} - ${empName} (Distance: ${Math.round(distance)}m)`;
-        logBox.appendChild(logEntry);
+        const record = {
+            date: new Date().toLocaleDateString(),
+            time: new Date().toLocaleTimeString(),
+            action: actionType,
+            name: empName,
+            distance: `${Math.round(distance)}m`,
+            lat: currentCoordinates.lat,
+            lng: currentCoordinates.lng,
+            photo: photoData
+        };
+
+        attendanceRecords.push(record);
+        
+        // Keep last 30 records to prevent browser storage overload
+        if (attendanceRecords.length > 30) attendanceRecords.shift();
+
+        localStorage.setItem('portal_attendance_records_v2', JSON.stringify(attendanceRecords));
+
+        renderSavedLogs();
+        updateStatus(`SUCCESS: ${actionType} recorded with Photo for '${empName}' at ${record.time}`, "var(--success)");
+    }
+
+    function renderSavedLogs() {
+        logBox.innerHTML = '<strong>Activity Logs with Photos:</strong>';
+        if (attendanceRecords.length === 0) {
+            logBox.innerHTML += '<p style="margin: 8px 0;">No attendance records yet.</p>';
+            return;
+        }
+
+        attendanceRecords.slice().reverse().forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'log-item';
+            
+            const img = document.createElement('img');
+            img.src = r.photo;
+            img.alt = r.name;
+            img.title = 'Click to view full photo';
+            img.onclick = () => {
+                const w = window.open("");
+                w.document.write(`<img src="${r.photo}" style="max-width:100%; border-radius:8px;" /><br><h3>${r.name} - ${r.action} (${r.date} ${r.time})</h3>`);
+            };
+
+            const info = document.createElement('div');
+            info.className = 'log-info';
+            info.innerHTML = `<strong>${r.name}</strong> (${r.action})<br><span style="color:var(--accent);">${r.date} ${r.time}</span> • ${r.distance} from office`;
+
+            item.appendChild(img);
+            item.appendChild(info);
+            logBox.appendChild(item);
+        });
+    }
+
+    function exportLogsCSV() {
+        if (attendanceRecords.length === 0) {
+            alert("No attendance records to export!");
+            return;
+        }
+
+        let csvContent = "data:text/csv;charset=utf-8,Date,Time,Action,Employee Name,Distance to Office,Latitude,Longitude\n";
+        attendanceRecords.forEach(r => {
+            csvContent += `"${r.date}","${r.time}","${r.action}","${r.name}","${r.distance}","${r.lat}","${r.lng}"\n`;
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `attendance_report_${new Date().toISOString().slice(0,10)}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     function updateStatus(text, color) {
